@@ -472,5 +472,61 @@ void QRPlane::TransformPointsCloudCorToWorld(pcl::PointCloud<pcl::PointXYZRGBA>:
     writer.write("/home/mzm/new_sr300_build_model/src/build_model2/data/bottom.ply",*transformed_cloud );
 }
 
+void QRPlane::RenderRGBImage(Mat &render_rgb_image)
+{
+    Mat edge_mask = Mat::zeros(_depth_image.size(),CV_8UC1);
+    for(int r = 0; r < edge_mask.rows; r++)
+    {
+        for(int c = 0; c<edge_mask.cols; c++)
+        {
+            if(!(_depth_image.ptr<float>(r)[c] > 0))
+            {
+                edge_mask.ptr<uchar>(r)[c] = 255;
+                continue;
+            }
+            float p1 = _depth_image.ptr<float>(r-1)[c-1];
+            float p2 = _depth_image.ptr<float>(r-1)[c];
+            float p3 = _depth_image.ptr<float>(r-1)[c+1];
+            float p4 = _depth_image.ptr<float>(r)[c-1];
+            float p5 = _depth_image.ptr<float>(r)[c];
+            float p6 = _depth_image.ptr<float>(r)[c+1];
+            float p7 = _depth_image.ptr<float>(r+1)[c-1];
+            float p8 = _depth_image.ptr<float>(r+1)[c];
+            float p9 = _depth_image.ptr<float>(r+1)[c+1];
+
+            float G0 = (p1+p2+p3)-(p7+p8+p9);
+            float G1 = (p1+p4+p7)-(p3+p6+p9);
+
+            // std::cout<<"G0:"<<G0<<" G1:"<<G1<<endl;
+
+            // float pmax = max(p1,p2,p3,p4,p5,p6,p7,p8,p9);
+            // float pmin = min(p1,p2,p3,p4,p5,p6,p7,p8,p9);
+            // float pmean = (pmax+pmin)/2;
+            if(max(G0,G1)>15)
+            {
+                edge_mask.ptr<uchar>(r)[c] = 255;
+            }
+        }
+    }
+    Mat element = getStructuringElement(MORPH_RECT, Size(15, 15)); 
+    dilate(edge_mask, edge_mask, element);
+    // imshow("edge_mask",edge_mask);
+    // waitKey(1);
+    for(int r = 0; r < render_rgb_image.rows; r++)
+    {
+        for(int c = 0; c<render_rgb_image.cols; c++)
+        {
+            if(edge_mask.ptr<uchar>(r)[c] == 255)
+            {
+                render_rgb_image.ptr<uchar>(r)[c*3] = 0;
+                render_rgb_image.ptr<uchar>(r)[c*3+1] = 0;
+                render_rgb_image.ptr<uchar>(r)[c*3+2] = 0;
+            }
+        }
+    }
+
+
+}
+
 }
 

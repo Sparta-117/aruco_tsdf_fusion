@@ -2,10 +2,10 @@
 
 // CUDA kernel function to integrate a TSDF voxel volume given depth images
 __global__
-void Integrate(float * cam_K, float * cam2world, float * depth_im,
+void Integrate(float * cam_K, float * cam2world, float * depth_im, unsigned char * rgb_im,
                int im_height, int im_width, int voxel_grid_dim_x, int voxel_grid_dim_y, int voxel_grid_dim_z,
                float voxel_grid_origin_x, float voxel_grid_origin_y, float voxel_grid_origin_z, float voxel_size, float trunc_margin,
-               float * voxel_grid_TSDF, float * voxel_grid_weight) {
+               float * voxel_grid_TSDF, float * voxel_grid_weight, unsigned char * voxel_grid_rgb) {
 
   int pt_grid_z = blockIdx.x;
   int pt_grid_y = threadIdx.x;
@@ -35,6 +35,10 @@ void Integrate(float * cam_K, float * cam2world, float * depth_im,
       continue;
 
     float depth_val = depth_im[pt_pix_y * im_width + pt_pix_x];
+    unsigned char rgb_val[3] = {0};
+    rgb_val[0] = rgb_im[pt_pix_y * im_width * 3 + pt_pix_x * 3 + 2];
+    rgb_val[1] = rgb_im[pt_pix_y * im_width * 3 + pt_pix_x * 3 + 1];
+    rgb_val[2] = rgb_im[pt_pix_y * im_width * 3 + pt_pix_x * 3];
 
     if (depth_val <= 0 || depth_val > 6)
       continue;
@@ -51,13 +55,23 @@ void Integrate(float * cam_K, float * cam2world, float * depth_im,
     float weight_new = weight_old + 1.0f;
     voxel_grid_weight[volume_idx] = weight_new;
     voxel_grid_TSDF[volume_idx] = (voxel_grid_TSDF[volume_idx] * weight_old + dist) / weight_new;
+
+    if((rgb_val[0] < 20)&&(rgb_val[1] < 20)&&(rgb_val[2] < 20))
+      continue;
+    // if((voxel_grid_TSDF[volume_idx]<0.2)&&(voxel_grid_weight[volume_idx]>5.0f))
+    // {
+      voxel_grid_rgb[volume_idx * 3] = rgb_val[0];
+      voxel_grid_rgb[volume_idx * 3 + 1] = rgb_val[1];
+      voxel_grid_rgb[volume_idx * 3 + 2] = rgb_val[2];
+    // }
+
   }
 }
 
 // Compute surface points from TSDF voxel grid and save points to point cloud file
 void SaveVoxelGrid2SurfacePointCloud(const std::string &file_name, int voxel_grid_dim_x, int voxel_grid_dim_y, int voxel_grid_dim_z,
                                      float voxel_size, float voxel_grid_origin_x, float voxel_grid_origin_y, float voxel_grid_origin_z,
-                                     float * voxel_grid_TSDF, float * voxel_grid_weight,
+                                     float * voxel_grid_TSDF, float * voxel_grid_weight, unsigned char * voxel_grid_rgb,
                                      float tsdf_thresh, float weight_thresh) {
 
   // Count total number of points in point cloud
@@ -70,10 +84,14 @@ void SaveVoxelGrid2SurfacePointCloud(const std::string &file_name, int voxel_gri
   FILE *fp = fopen(file_name.c_str(), "w");
   fprintf(fp, "ply\n");
   fprintf(fp, "format binary_little_endian 1.0\n");
+  // fprintf(fp, "format ascii 1.0\n");
   fprintf(fp, "element vertex %d\n", num_pts);
   fprintf(fp, "property float x\n");
   fprintf(fp, "property float y\n");
   fprintf(fp, "property float z\n");
+  fprintf(fp, "property uchar red\n");
+  fprintf(fp, "property uchar green\n");
+  fprintf(fp, "property uchar blue\n");
   fprintf(fp, "end_header\n");
 
   // Create point cloud content for ply file
@@ -91,9 +109,22 @@ void SaveVoxelGrid2SurfacePointCloud(const std::string &file_name, int voxel_gri
       float pt_base_x = voxel_grid_origin_x + (float) x * voxel_size;
       float pt_base_y = voxel_grid_origin_y + (float) y * voxel_size;
       float pt_base_z = voxel_grid_origin_z + (float) z * voxel_size;
+      unsigned char pt_base_r = voxel_grid_rgb[i * 3];
+      unsigned char pt_base_g = voxel_grid_rgb[i * 3 + 1];
+      unsigned char pt_base_b = voxel_grid_rgb[i * 3 + 2];
       fwrite(&pt_base_x, sizeof(float), 1, fp);
       fwrite(&pt_base_y, sizeof(float), 1, fp);
       fwrite(&pt_base_z, sizeof(float), 1, fp);
+      fwrite(&pt_base_r, sizeof(unsigned char), 1, fp);
+      fwrite(&pt_base_g, sizeof(unsigned char), 1, fp);
+      fwrite(&pt_base_b, sizeof(unsigned char), 1, fp);
+      // if((pt_base_r<50)&&(pt_base_g<50)&&(pt_base_b<50))
+      // {
+      //   std::cout<<"r:"<<(int)pt_base_r;
+      //   std::cout<<" g:"<<(int)pt_base_g;
+      //   std::cout<<" b:"<<(int)pt_base_b<<std::endl;
+      // }
+      // std::cout<<"No: i"<<i<<" r:"<<(int)pt_base_r<<" g:"<< (int)pt_base_g<<" b:"<<(int)pt_base_r<<std::endl;
     }
   }
   fclose(fp);
@@ -176,7 +207,7 @@ void ReadDepth(cv::Mat depth_mat, int H, int W, float * depth, int depth_scale)
     }
 }
 
-void ReadRGB(cv::Mat rgb_mat, int H, int W, int * rgb)
+void ReadRGB(cv::Mat rgb_mat, int H, int W, unsigned char * rgb)
 {
   if (rgb_mat.empty())
   {
@@ -188,8 +219,7 @@ void ReadRGB(cv::Mat rgb_mat, int H, int W, int * rgb)
     {
       for(int channel = 0; channel < 3; channel++)
       {
-        rgb[r * W + c * 3 + channel] = (rgb_mat.ptr<uchar>(r)[c*3+channel]);
-        // std::cout<<"rgb:"<<(int)(rgb_mat.at<int>(r, c)[channel])<<std::endl;
+        rgb[r * W * 3 + c * 3 + channel] = rgb_mat.ptr<uchar>(r)[c*3+channel];
       }
     }
 }
@@ -361,15 +391,15 @@ void checkCUDA(const int lineNumber, cudaError_t status) {
   }
 }
 
-void RunKernal(float * cam_K, float * cam2world, float * depth_im,
+void RunKernal(float * cam_K, float * cam2world, float * depth_im, unsigned char * rgb_im,
                 int im_height, int im_width, int voxel_grid_dim_x, int voxel_grid_dim_y, int voxel_grid_dim_z,
                 float voxel_grid_origin_x, float voxel_grid_origin_y, float voxel_grid_origin_z, float voxel_size, float trunc_margin,
-                float * voxel_grid_TSDF, float * voxel_grid_weight)
+                float * voxel_grid_TSDF, float * voxel_grid_weight, unsigned char * voxel_grid_rgb)
 {
-    Integrate <<< voxel_grid_dim_z, voxel_grid_dim_y >>>(cam_K, cam2world, depth_im,
+    Integrate <<< voxel_grid_dim_z, voxel_grid_dim_y >>>(cam_K, cam2world, depth_im, rgb_im,
                                                      im_height, im_width, voxel_grid_dim_x, voxel_grid_dim_y, voxel_grid_dim_z,
                                                      voxel_grid_origin_x, voxel_grid_origin_y, voxel_grid_origin_z, voxel_size, trunc_margin,
-                                                     voxel_grid_TSDF, voxel_grid_weight);
+                                                     voxel_grid_TSDF, voxel_grid_weight, voxel_grid_rgb);
 }
 
 

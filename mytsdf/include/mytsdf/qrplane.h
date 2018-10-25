@@ -87,6 +87,7 @@ public:
 //    void CutCubeInPointsCloud();
     void AllQRCornersInCamCor();
     void SaveQRPlaneData(int index);
+    void RenderRGBImage(Mat &render_rgb_image);
 
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW //此处添加宏定义
 
